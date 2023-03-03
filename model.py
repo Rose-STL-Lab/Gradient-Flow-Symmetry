@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+# import torch.nn.functional as F
 from torch.nn import Parameter
 
 class TwoLayerRadial(nn.Module):
     def __init__(self, init_U, init_V):
         super(TwoLayerRadial, self).__init__()
-
         self.U = Parameter(init_U.clone())
         self.V = Parameter(init_V.clone())
 
@@ -14,10 +13,8 @@ class TwoLayerRadial(nn.Module):
         V_T = self.V.T
         V_T_square = torch.square(V_T)
         row_norm_square = torch.sum(V_T_square, dim=1)
-        row_norm_square = row_norm_square - 0#1e-21
+        row_norm_square = row_norm_square - 0
         g_V_T = V_T / row_norm_square[:,None]
-        # print(row_norm_square[:,None])
-        # exit()
 
         out = torch.matmul(self.U, g_V_T)
         return out

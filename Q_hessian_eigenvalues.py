@@ -1,6 +1,5 @@
 import torch
 from torch import nn
-import torch.nn.functional as F
 from torch.nn import Parameter
 from torch.autograd.functional import hessian
 
@@ -9,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from model import TwoLayerElementwise
+from utils import compute_Q, loss_2norm, get_U_V
 
 relu = nn.ReLU()
 sigmoid = nn.Sigmoid()
@@ -19,40 +19,7 @@ if not os.path.exists('figures'):
 if not os.path.exists('figures/Q-hessian-eigenvalues'):
     os.mkdir('figures/Q-hessian-eigenvalues')
 
-def loss_2norm(U, V, Y, activation):
-    if activation == 'linear':
-        norm_Y_X = torch.norm(Y - torch.matmul(U, V.T))
-    elif activation == 'relu':
-        norm_Y_X = torch.norm(Y - torch.matmul(U, relu(V.T)))
-    elif activation == 'tanh':
-        norm_Y_X = torch.norm(Y - torch.matmul(U, tanh(V.T)))
-    elif activation == 'sigmoid':
-        norm_Y_X = torch.norm(Y - torch.matmul(U, sigmoid(V.T)))
-    else:
-        raise 
-    return norm_Y_X**2
-
-def compute_Q(U, V, activation):
-    if activation == 'linear':
-        Q = torch.trace(torch.matmul(U.T, U) - torch.matmul(V.T, V)) #linear
-    elif activation == 'relu':
-        Q = torch.trace(torch.matmul(U.T, U) - torch.matmul(relu(V.T), relu(V))) #relu
-    elif activation == 'tanh':
-        Q = torch.trace(torch.matmul(U.T, U) - torch.matmul(torch.cosh(V.T), torch.cosh(V))) #tanh
-    elif activation == 'sigmoid':
-        Q = 0.5 * torch.trace(torch.matmul(U.T, U)) - torch.sum(V) - torch.sum(torch.exp(V)) #sigmoid
-    else:
-        raise 
-    return Q
-
-def get_U_V(model):
-    param_list = []
-    for param in model.parameters():
-        param_list.append(param.data)
-    U = param_list[0].clone() # 5 x 50
-    V = param_list[1].clone() # 10 x 50
-    return U, V
-
+# Training for one epoch
 def train_epoch(epoch, x_train, y_train):
     model.train()
     optimizer.zero_grad()
@@ -62,12 +29,9 @@ def train_epoch(epoch, x_train, y_train):
     optimizer.step()
 
     U, V = get_U_V(model)
-    Q_imbalance = torch.trace(torch.matmul(U.T, U) - torch.matmul(V.T, V))
-
     Q = compute_Q(U, V, activation)
-    loss = loss_2norm(U, V, y_train, activation)
-
-    return loss, Q, Q_imbalance
+    loss = loss_2norm(U, V, y_train, activation)**2
+    return loss, Q
 
 
 m = 10
@@ -77,7 +41,7 @@ lr = 1e-1
 sigma = [0.001, 0.3, 0.6, 0.9]
 device = torch.device('cpu')
 
-for activation in ['linear', 'relu', 'tanh', 'sigmoid']: #['linear']:
+for activation in ['linear', 'relu', 'tanh', 'sigmoid']: 
     X = torch.eye(n).to(device)
     torch.manual_seed(12345)
     Y = torch.rand(m, n).normal_(mean=0,std=1).to(device)
@@ -97,23 +61,20 @@ for activation in ['linear', 'relu', 'tanh', 'sigmoid']: #['linear']:
         
         model.to(device)
         Q = compute_Q(U, V, activation)
-        loss = loss_2norm(U, V, Y, activation)
+        loss = loss_2norm(U, V, Y, activation)**2
 
         criterion = nn.MSELoss()
         optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 
         loss_arr = [loss.detach().cpu().numpy()]
         Q_arr = [Q.detach().cpu().numpy()]
-        Q_arr_imbalance = []
         nepoch = 8000 if activation == 'sigmoid' else 4000
         for epoch in range(nepoch):
-            loss, Q_train, Q_train_imbalance = train_epoch(epoch, X, Y)
+            loss, Q_train = train_epoch(epoch, X, Y)
             loss_arr.append(loss.detach().cpu().numpy())
             Q_arr.append(Q_train.detach().cpu().numpy())
-            Q_arr_imbalance.append(Q_train_imbalance.cpu().detach().numpy())
         
         Q_all.append(Q_arr)
-        imbalance_all.append(Q_arr_imbalance)
         loss_all.append(loss_arr)
 
         U, V = get_U_V(model)
@@ -125,17 +86,7 @@ for activation in ['linear', 'relu', 'tanh', 'sigmoid']: #['linear']:
         def loss_2norm_UV(UV_vec):
             U = torch.reshape(UV_vec[:m*k], (m, k))
             V = torch.reshape(UV_vec[m*k:], (n, k))
-            if activation == 'linear':
-                norm_Y_X = torch.norm(Y - torch.matmul(U, V.T))
-            elif activation == 'relu':
-                norm_Y_X = torch.norm(Y - torch.matmul(U, relu(V.T)))
-            elif activation == 'tanh':
-                norm_Y_X = torch.norm(Y - torch.matmul(U, tanh(V.T)))
-            elif activation == 'sigmoid':
-                norm_Y_X = torch.norm(Y - torch.matmul(U, sigmoid(V.T)))
-            else:
-                raise 
-            return norm_Y_X**2
+            return loss_2norm(U, V, Y, activation)**2
 
         H = hessian(loss_2norm_UV, inputs)
         eig_vals = torch.linalg.eigvals(H)
@@ -149,7 +100,6 @@ for activation in ['linear', 'relu', 'tanh', 'sigmoid']: #['linear']:
             Q_label = 'Q={0:.2e}'.format(Q_all[i][0])
         bin_vals, bins, patches = plt.hist(eig_vals.detach().cpu().numpy(), bins=np.arange(1e-3, 401, 4, dtype=float), \
                                            alpha=0.8, label=Q_label)
-        # print(bin_vals[:10])
 
     
     if activation == 'linear':
